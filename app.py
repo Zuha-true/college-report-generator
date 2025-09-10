@@ -1,10 +1,11 @@
+# app.py
 import streamlit as st
 from docx import Document
 import tempfile, os, subprocess
 from helpers.docx_utils import replace_placeholders_in_doc
 from helpers.gemini_client import configure, generate_section
 
-# ============ PAGE CONFIG + CUSTOM CSS ============
+# --- Page config and style ---
 st.set_page_config(page_title="College Report Generator", layout="centered")
 st.markdown(
     """
@@ -21,33 +22,22 @@ st.markdown(
         border-radius: 8px;
         margin-bottom: 18px;
     }
-    .stButton>button {
-        background-color: var(--teal);
-        color: white;
-        border-radius: 8px;
-        padding: 8px 16px;
-        border: none;
-    }
-    .stDownloadButton>button {
-        background-color: #34c6a5;
-        color: white;
-        border-radius: 8px;
-    }
+    .stButton>button { background-color: var(--teal); color: white; border-radius: 8px; padding: 8px 16px; border: none; }
+    .stDownloadButton>button { background-color: #34c6a5; color: white; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True
 )
 
 st.markdown(
     '<div class="report-header"><h2>📑 College Report Generator</h2>'
-    '<div style="font-size:14px">Generate a formatted report from a short project description using Gemini AI</div></div>',
+    '<div style="font-size:14px">Auto-generate a formatted report (first 2 pages preserved) using Gemini</div></div>',
     unsafe_allow_html=True
 )
 
-# ============ FORM INPUT ============
+# --- Input form ---
 with st.form("input_form"):
     st.subheader("🎓 Student & Project Details")
-
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([2,1])
     with col1:
         college_name = st.text_input("College Name", "ANJUMAN INSTITUTE OF TECHNOLOGY AND MANAGEMENT, BHATKAL")
         affiliation = st.text_input("Affiliation", "Affiliated to Visvesvaraya Technological University, Belagavi")
@@ -60,41 +50,38 @@ with st.form("input_form"):
         professor_name = st.text_input("Professor / Guide", "Prof. Syed Nooreain")
         professor_designation = st.text_input("Designation", "Assistant Professor")
 
-    st.subheader("📝 Project Description")
+    st.subheader("📝 Project description (1-3 short sentences)")
     project_desc = st.text_area("Short description", 
                                 "A database management system to manage student records, including CRUD, search, and reporting features.")
 
     convert_pdf = st.checkbox("Also produce PDF (requires MS Word on Windows/Mac or LibreOffice on Linux)", value=False)
-    st.form_submit_button("Generate report")
+
     submitted = st.form_submit_button("Generate Report")
 
-# ============ HANDLE SUBMISSION ============
+# --- On submit ---
 if submitted:
-    # --- Get API Key ---
-    api_key_input = None
-    if "GEMINI_API_KEY" in st.secrets:  # secrets.toml (best for Streamlit Cloud)
-        api_key_input = st.secrets["GEMINI_API_KEY"]
-    elif os.getenv("GEMINI_API_KEY"):   # environment variable
-        api_key_input = os.getenv("GEMINI_API_KEY")
-    else:                               # fallback to UI field
-        api_key_input = st.text_input("Enter your Gemini API Key to continue", type="password")
-
-    if not api_key_input:
-        st.error("❌ No Gemini API Key found. Please set GEMINI_API_KEY env var, add to .streamlit/secrets.toml, or paste above.")
+    # ✅ Use only Streamlit Secrets
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("❌ No Gemini API Key found. Please add it in Streamlit Cloud settings → Secrets → GEMINI_API_KEY")
         st.stop()
 
-    # Configure Gemini
-    configure(api_key=api_key_input)
+    gemini_key = st.secrets["GEMINI_API_KEY"]
 
-    # --- Load template.docx ---
+    # configure Gemini
+    try:
+        configure(api_key=gemini_key)
+    except Exception as e:
+        st.error(f"Failed to configure Gemini client: {e}")
+        st.stop()
+
+    # ensure template.docx exists
     template_path = "template.docx"
     if not os.path.exists(template_path):
-        st.error("❌ template.docx not found. Please create it with placeholders and place it in the project root.")
+        st.error("❌ template.docx (first 2 pages) not found. Please place it in the project root.")
         st.stop()
 
+    # load doc and replace placeholders
     doc = Document(template_path)
-
-    # Replace placeholders
     replace_map = {
         "{COLLEGE_NAME}": college_name,
         "{AFFILIATION}": affiliation,
@@ -107,42 +94,39 @@ if submitted:
     }
     doc = replace_placeholders_in_doc(doc, replace_map)
 
-    # --- Generate Report Sections with Gemini ---
+    # generate sections
     sections = [
-        "Abstract",
-        "Introduction",
-        "Problem Statement",
-        "Proposed Solution",
-        "Features",
-        "Technologies Used",
-        "System Requirements",
-        "Conclusion",
-        "References",
+        "Abstract", "Introduction", "Problem Statement", "Proposed Solution",
+        "Features", "Technologies Used", "System Requirements", "Conclusion", "References"
     ]
 
-    st.info("⚡ Generating report content with Gemini...")
-    ai_contents = {}
+    st.info("⚡ Generating report content using Gemini (this may take ~10–30s)...")
     progress = st.progress(0)
+    ai_contents = {}
     for i, sec in enumerate(sections):
-        ai_contents[sec] = generate_section(project_desc, sec)
-        progress.progress((i + 1) / len(sections))
+        try:
+            ai_contents[sec] = generate_section(project_desc, sec)
+        except Exception as e:
+            ai_contents[sec] = f"(⚠️ Failed to generate section '{sec}': {e})"
+        progress.progress((i+1)/len(sections))
 
-    # Add AI sections to doc
+    # append sections to doc
     doc.add_page_break()
     for title, content in ai_contents.items():
         doc.add_heading(title, level=1)
         doc.add_paragraph(content)
         doc.add_page_break()
 
-    # Save DOCX
+    # save docx to temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         doc.save(tmp.name)
         docx_path = tmp.name
 
+    # download button for docx
     with open(docx_path, "rb") as f:
         st.download_button("📥 Download Report (.docx)", f, file_name=f"{project_title.replace(' ','_')}.docx")
 
-    # Optional PDF Conversion
+    # optional PDF export
     if convert_pdf:
         try:
             from docx2pdf import convert
@@ -150,13 +134,16 @@ if submitted:
             convert(docx_path, pdf_out)
             with open(pdf_out, "rb") as f:
                 st.download_button("📥 Download Report (.pdf)", f, file_name=f"{project_title.replace(' ','_')}.pdf")
-        except Exception as e:
-            st.warning("⚠️ docx2pdf failed (MS Word not found). Trying LibreOffice...")
+        except Exception:
+            st.warning("⚠️ docx2pdf failed. Trying LibreOffice (soffice)...")
             try:
                 pdf_out = docx_path.replace(".docx", ".pdf")
-                subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", os.path.dirname(docx_path), docx_path], check=True)
+                subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
+                                "--outdir", os.path.dirname(docx_path), docx_path], check=True)
                 if os.path.exists(pdf_out):
                     with open(pdf_out, "rb") as f:
                         st.download_button("📥 Download Report (.pdf)", f, file_name=f"{project_title.replace(' ','_')}.pdf")
+                else:
+                    st.error("❌ LibreOffice conversion failed.")
             except Exception:
-                st.error("❌ PDF conversion failed. Please open the .docx in Word/LibreOffice and export manually.")
+                st.error("❌ PDF conversion failed. Please export manually from the .docx.")
