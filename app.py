@@ -112,8 +112,11 @@ if submitted:
 
     # append sections to doc
     doc.add_page_break()
-    for title, content in ai_contents.items():
-        doc.add_heading(title, level=1)
+        for title, content in ai_contents.items():
+        para = doc.add_paragraph()
+        run = para.add_run(title)
+        run.bold = True
+        run.font.size = doc.styles['Normal'].font.size  # keep consistent size
         doc.add_paragraph(content)
         doc.add_page_break()
 
